@@ -1,123 +1,123 @@
+import { ErrorCode } from "./error-code.ts";
 import {
   JsonRpc2ProxyHandler,
   ProxyableObject,
 } from "./json-rpc2-proxy-handler.ts";
+
 import {
+  AnyResponse,
+  ErrorResponse,
+  errorResponse,
   Id,
+  isArray,
+  isErrorResponse,
+  isFunction,
   isNonNullId,
   isRequest,
-  isResponse,
+  isResultResponse,
+  Message,
   NonNullId,
   Params,
   Request,
-  Response,
+  ResultResponse,
+  resultResponse,
   Value,
-} from "./types.ts";
-
-type Message = Request<Params, Id> | Response<Value, Id, Value>;
-
-export type Listener<T> = (t: T) => void;
-export type MessageListener = Listener<Message>;
-export type ListenerRemover = () => void;
-
-export interface Transporter {
-  send(
-    message: Message,
-  ): Promise<void>;
-
-  addMessageListener(messageListener: MessageListener): ListenerRemover;
-}
-
-export abstract class StringTransporter implements Transporter {
-  readonly #messageListeners: Set<MessageListener> = new Set();
-
-  addMessageListener(messageListener: MessageListener): ListenerRemover {
-    this.#messageListeners.add(messageListener);
-    return () => this.#messageListeners.delete(messageListener);
-  }
-
-  send(
-    message: Message,
-  ): Promise<void> {
-    return this.sendString(JSON.stringify(message));
-  }
-
-  abstract sendString(message: string): Promise<void>;
-
-  addStringListener(stringListener: Listener<string>) {
-    return this.addMessageListener((message: Message) =>
-      stringListener(JSON.stringify(message))
-    );
-  }
-}
+} from "./model.ts";
+import { Transport } from "./transport.ts";
 
 export abstract class AbstractJsonRpc2 {
-  protected readonly transporter: Transporter;
-  protected readonly deferredResolutions: Map<
-    NonNullId,
-    {
-      resolve: (response: Response<any, any, any>) => void;
-      reject: (error: any) => void;
-    }
-  > = new Map();
+  protected readonly messageTransport: Transport<Message>;
+  protected readonly deferredResolutions: Map<NonNullId, {
+    resolve: (response: ResultResponse<Value>) => void;
+    reject: (error: ErrorResponse<Value>) => void;
+  }> = new Map();
 
-  constructor(transporter: Transporter) {
-    this.transporter = transporter;
+  constructor(messageTransport: Transport<Message>) {
+    this.messageTransport = messageTransport;
   }
-
-  abstract call<
-    P extends Params,
-    I extends Id,
-    R extends Value,
-    E extends Value,
-  >(
-    req: Request<P, I>,
-  ): Promise<Response<R, I, E> | void>;
-
-  abstract handleResponse<
-    R extends Value,
-    I extends Id,
-    E extends Value,
-  >(
-    response: Response<R, I, E>,
-  ): void;
 }
 
-export abstract class ProxyBasedJsonRpc2 extends AbstractJsonRpc2 {
-  constructor(transporter: Transporter) {
-    super(transporter);
-    transporter.addMessageListener((message: Message) => {
-      if (isRequest(message)) {
-        this.call(message);
-      }
-      if (isResponse(message)) {
-        this.handleCall(message);
-      }
-    });
-  }
+export abstract class ProxyBasedJsonRpc2<
+  LX extends ProxyableObject,
+  RX extends ProxyableObject,
+> extends AbstractJsonRpc2 {
+  readonly local: LX;
+  readonly remote: RX;
 
-  wrap<T extends ProxyableObject>(
-    delegate: T,
-  ): T {
-    return new Proxy(
-      delegate,
+  constructor(messageTransport: Transport<Message>, local: LX, remote: RX) {
+    super(messageTransport);
+    messageTransport.addListener(this.handleMessage.bind(this));
+    this.local = local;
+    this.remote = new Proxy(
+      remote,
       new JsonRpc2ProxyHandler(this),
-    ) as T;
+    ) as RX;
   }
 
-  async call<P extends Params, I extends Id, R extends Value, E extends Value>(
-    req: Request<P, I>,
-  ): Promise<Response<R, I, E> | void> {
-    await this.transporter.send(req);
+  async call(req: Request<P, I>): Promise<AnyResponse<R, E> | void> {
     const id = req.id;
     if (!isNonNullId(id)) return;
-    return new Promise((resolve, reject) => {
-      this.deferredResolutions.set(id, { resolve, reject });
-    });
+    const promise: Promise<AnyResponse<R, E> | void> = new Promise(
+      (resolve, reject) => {
+        this.deferredResolutions.set(id, { resolve, reject });
+      },
+    );
+    await this.messageTransport.send(req);
+    return promise;
   }
 
-  handleResponse<R extends Value, I extends Id, E extends Value>(
-    response: Response<R, I, E>,
-  ): void {
+  async handleMessage(message: Message): Promise<void> {
+    if (isResultResponse(message) || isErrorResponse(message)) {
+      const response: AnyResponse<Value, Value> = message;
+      if (!this.deferredResolutions.has(response.id)) {
+        return;
+      }
+      const { resolve, reject } = this.deferredResolutions.get(response.id)!;
+
+      if (isResultResponse(response)) {
+        return resolve(response);
+      }
+      if (isErrorResponse(response)) {
+        return reject(response);
+      }
+    }
+
+    if (isRequest(message)) {
+      const request: Request<Params, Id> = message;
+
+      const id = request.id;
+      const params: Params = request.params ?? [];
+
+      let method: Function = this.local[request.method];
+      if (!isFunction(method)) {
+        if (isNonNullId(id)) {
+          this.messageTransport.send(
+            errorResponse(
+              id,
+              ErrorCode.MethodNotFound,
+              `Method ${request.method} not found.`,
+            ),
+          );
+        }
+        return;
+      }
+      method = method.bind(this.local);
+
+      if (isNonNullId(id)) {
+        const returned = isArray(params) ? method(...params) : method(params);
+        Promise.resolve(returned).then(
+          (result) => {
+            this.messageTransport.send(resultResponse(id, result));
+          },
+          (error) => {
+            this.messageTransport.send(
+              errorResponse(id, error.code, error.message ?? error.name, error),
+            );
+          },
+        );
+      } else {
+        isArray(params) ? method(...params) : method(params);
+      }
+    }
   }
 }

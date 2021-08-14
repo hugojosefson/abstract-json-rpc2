@@ -36,17 +36,23 @@ export interface Request<P extends Params, I extends Id> {
 
 export type Notification<P extends Params> = Request<P, never>;
 
-export type Response<R extends Value, I extends Id, E extends Value> = {
+export type ResultResponse<R extends Value> = {
   jsonrpc: typeof VERSION;
   result: R;
-  id: I;
-} | {
-  jsonrpc: typeof VERSION;
-  error: ResponseError<E>;
-  id: I;
+  id: NonNullId;
 };
 
-export interface ResponseError<E extends Value> {
+export type ErrorResponse<E extends Value> = {
+  jsonrpc: typeof VERSION;
+  error: ErrorResponseError<E>;
+  id: NonNullId;
+};
+
+export type AnyResponse<R extends Value, E extends Value> =
+  | ResultResponse<R>
+  | ErrorResponse<E>;
+
+export interface ErrorResponseError<E extends Value> {
   code: ErrorCode | number;
   message: string;
   data?: E;
@@ -74,9 +80,9 @@ export function request<P extends Params>(
 }
 
 export function resultResponse<R extends Value>(
-  id: string,
+  id: NonNullId,
   result: R,
-): Response<R, string, never> {
+): ResultResponse<R> {
   return {
     jsonrpc: "2.0",
     result,
@@ -85,16 +91,16 @@ export function resultResponse<R extends Value>(
 }
 
 export function errorResponse<E extends Value>(
-  id: string,
+  id: NonNullId,
   code: ErrorCode | number,
   message: string,
   data?: E,
-): Response<never, string, E> {
+): ErrorResponse<E> {
   return {
     jsonrpc: "2.0",
     error: {
-      code,
-      message,
+      code: code ?? ErrorCode.InternalError,
+      message: message ?? "Unknown error",
       data,
     },
     id,
@@ -109,6 +115,10 @@ export function isRequest(a: any): a is Request<any, any> {
   return isObject(a) &&
     a.jsonrpc === VERSION &&
     typeof a.method === "string";
+}
+
+export function isFunction(a: any): a is Function {
+  return typeof a === "function";
 }
 
 export function isString(a: any): a is string {
@@ -135,7 +145,9 @@ export function isValue(a: any): a is Value {
     isArray(a);
 }
 
-export function isResponseError(a: any): a is ResponseError<any> {
+export function isErrorResponseError<E extends Value>(
+  a: any,
+): a is ErrorResponseError<E> {
   return isObject(a) &&
     isNumber(a.code) &&
     isString(a.message);
@@ -149,8 +161,20 @@ export function isObject(a: any): a is Record<string | symbol, any> {
   return typeof a === "object";
 }
 
-export function isResponse(a: any): a is Response<any, any, any> {
+export function isResultResponse<R extends Value>(
+  a: any,
+): a is ResultResponse<R> {
   return isObject(a) &&
-    a.jsonrpc === VERSION &&
-    xor(isValue(a.result), isResponseError(a.error));
+    a.jsonrpc === VERSION && isValue(a.result) && isNonNullId(a.id);
 }
+
+export function isErrorResponse<E extends Value>(
+  a: any,
+): a is ErrorResponse<E> {
+  return isObject(a) &&
+    a.jsonrpc === VERSION && isErrorResponseError(a.error) && isNonNullId(a.id);
+}
+
+export type Message =
+  | Request<Params, Id>
+  | AnyResponse<Value, Value>;

@@ -1,5 +1,5 @@
 import { JsonRpc2ClientServer } from "./json-rpc2.ts";
-import { Params, request, Value } from "./types.ts";
+import { Params, request, Value } from "./model.ts";
 
 export type ProxyableFunction = (params: Params) => Promise<Value | void>;
 export type ProxyableObject = Record<string, ProxyableFunction>;
