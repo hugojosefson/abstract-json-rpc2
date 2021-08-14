@@ -2,19 +2,17 @@ import {
   JsonRpc2ProxyHandler,
   ProxyableObject,
 } from "./json-rpc2-proxy-handler.ts";
-import { Id, NonNullId, Params, Request, Response, Value } from "./types.ts";
-
-export interface JsonRpc2Server {
-  handleResponse<R extends Value, I extends Id, E extends Value>(
-    response: Response<R, I, E>,
-  ): void;
-}
-
-export interface JsonRpc2Client {
-  call<P extends Params, I extends Id, R extends Value, E extends Value>(
-    req: Request<P, I>,
-  ): Promise<Response<R, I, E> | void>;
-}
+import {
+  Id,
+  isNonNullId,
+  isRequest,
+  isResponse,
+  NonNullId,
+  Params,
+  Request,
+  Response,
+  Value,
+} from "./types.ts";
 
 type Message = Request<Params, Id> | Response<Value, Id, Value>;
 
@@ -53,9 +51,7 @@ export abstract class StringTransporter implements Transporter {
   }
 }
 
-export type JsonRpc2ClientServer = JsonRpc2Client & JsonRpc2Server;
-
-export abstract class AbstractJsonRpc2 implements JsonRpc2ClientServer {
+export abstract class AbstractJsonRpc2 {
   protected readonly transporter: Transporter;
   protected readonly deferredResolutions: Map<
     NonNullId,
@@ -85,10 +81,6 @@ export abstract class AbstractJsonRpc2 implements JsonRpc2ClientServer {
   >(
     response: Response<R, I, E>,
   ): void;
-}
-
-function isNonNullId(id: any): id is NonNullId {
-  return ["string", "number"].includes(typeof id);
 }
 
 export abstract class ProxyBasedJsonRpc2 extends AbstractJsonRpc2 {
