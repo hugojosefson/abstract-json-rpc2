@@ -35,6 +35,17 @@ export abstract class AbstractJsonRpc2 {
   constructor(messageTransport: Transport<Message>) {
     this.messageTransport = messageTransport;
   }
+
+  abstract call<
+    P extends Params,
+    I extends Id,
+    R extends Value,
+    E extends Value,
+  >(
+    req: Request<P, I>,
+  ): Promise<AnyResponse<R, E> | void>;
+
+  abstract handleMessage(message: Message): void;
 }
 
 export abstract class ProxyBasedJsonRpc2<
@@ -61,7 +72,6 @@ export abstract class ProxyBasedJsonRpc2<
     if (!isNonNullId(id)) return;
     const promise: Promise<AnyResponse<R, E> | void> = new Promise(
       (resolve, reject) => {
-        // @ts-ignore
         this.deferredResolutions.set(id, { resolve, reject });
       },
     );
@@ -69,17 +79,19 @@ export abstract class ProxyBasedJsonRpc2<
     return promise;
   }
 
-  async handleMessage(message: Message): Promise<void> {
+  handleMessage(message: Message): void {
     if (isResultResponse(message) || isErrorResponse(message)) {
-      return this.handleAnyResponse(message);
+      this.handleAnyResponse(message);
+      return;
     }
 
     if (isRequest(message)) {
-      return this.handleRequest(message);
+      this.handleRequest(message);
+      return;
     }
   }
 
-  protected async handleAnyResponse(response: AnyResponse<Value, Value>) {
+  protected handleAnyResponse(response: AnyResponse<Value, Value>): void {
     if (!this.deferredResolutions.has(response.id)) {
       return;
     }
@@ -93,10 +105,11 @@ export abstract class ProxyBasedJsonRpc2<
     }
   }
 
-  protected async handleRequest(request: Request<Params, Id>) {
+  protected handleRequest(request: Request<Params, Id>): void {
     const id = request.id;
     const params: Params = request.params ?? [];
 
+    // deno-lint-ignore ban-types
     let method: Function = this.local[request.method];
     if (!isFunction(method)) {
       if (isNonNullId(id)) {
