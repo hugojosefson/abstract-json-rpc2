@@ -68,56 +68,61 @@ export abstract class ProxyBasedJsonRpc2<
 
   async handleMessage(message: Message): Promise<void> {
     if (isResultResponse(message) || isErrorResponse(message)) {
-      const response: AnyResponse<Value, Value> = message;
-      if (!this.deferredResolutions.has(response.id)) {
-        return;
-      }
-      const { resolve, reject } = this.deferredResolutions.get(response.id)!;
-
-      if (isResultResponse(response)) {
-        return resolve(response);
-      }
-      if (isErrorResponse(response)) {
-        return reject(response);
-      }
+      return this.handleAnyResponse(message);
     }
 
     if (isRequest(message)) {
-      const request: Request<Params, Id> = message;
+      return this.handleRequest(message);
+    }
+  }
 
-      const id = request.id;
-      const params: Params = request.params ?? [];
+  protected async handleAnyResponse(response: AnyResponse<Value, Value>) {
+    if (!this.deferredResolutions.has(response.id)) {
+      return;
+    }
+    const { resolve, reject } = this.deferredResolutions.get(response.id)!;
 
-      let method: Function = this.local[request.method];
-      if (!isFunction(method)) {
-        if (isNonNullId(id)) {
-          this.messageTransport.send(
-            errorResponse(
-              id,
-              ErrorCode.MethodNotFound,
-              `Method ${request.method} not found.`,
-            ),
-          );
-        }
-        return;
-      }
-      method = method.bind(this.local);
+    if (isResultResponse(response)) {
+      return resolve(response);
+    }
+    if (isErrorResponse(response)) {
+      return reject(response);
+    }
+  }
 
+  protected async handleRequest(request: Request<Params, Id>) {
+    const id = request.id;
+    const params: Params = request.params ?? [];
+
+    let method: Function = this.local[request.method];
+    if (!isFunction(method)) {
       if (isNonNullId(id)) {
-        const returned = isArray(params) ? method(...params) : method(params);
-        Promise.resolve(returned).then(
-          (result) => {
-            this.messageTransport.send(resultResponse(id, result));
-          },
-          (error) => {
-            this.messageTransport.send(
-              errorResponse(id, error.code, error.message ?? error.name, error),
-            );
-          },
+        this.messageTransport.send(
+          errorResponse(
+            id,
+            ErrorCode.MethodNotFound,
+            `Method ${request.method} not found.`,
+          ),
         );
-      } else {
-        isArray(params) ? method(...params) : method(params);
       }
+      return;
+    }
+    method = method.bind(this.local);
+
+    if (isNonNullId(id)) {
+      const returned = isArray(params) ? method(...params) : method(params);
+      Promise.resolve(returned).then(
+        (result) => {
+          this.messageTransport.send(resultResponse(id, result));
+        },
+        (error) => {
+          this.messageTransport.send(
+            errorResponse(id, error.code, error.message ?? error.name, error),
+          );
+        },
+      );
+    } else {
+      isArray(params) ? method(...params) : method(params);
     }
   }
 }
