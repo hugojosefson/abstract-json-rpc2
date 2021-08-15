@@ -54,11 +54,14 @@ export abstract class ProxyBasedJsonRpc2<
     ) as RX;
   }
 
-  async call(req: Request<P, I>): Promise<AnyResponse<R, E> | void> {
+  async call<P extends Params, I extends Id, R extends Value, E extends Value>(
+    req: Request<P, I>,
+  ): Promise<AnyResponse<R, E> | void> {
     const id = req.id;
     if (!isNonNullId(id)) return;
     const promise: Promise<AnyResponse<R, E> | void> = new Promise(
       (resolve, reject) => {
+        // @ts-ignore
         this.deferredResolutions.set(id, { resolve, reject });
       },
     );
